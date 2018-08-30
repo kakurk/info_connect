@@ -11,7 +11,8 @@ addpath('/gsfs0/data/kurkela/Documents/latest_IC_toolbox');
 % inital_spm_model_path = where the original SPM models are
 % bids_path = where the raw BIDS formatted data are
 data_path  = '/gsfs0/data/ritcheym/data/fmri/mice/analysis/encoding/SingleTrialModel_regularmodel';
-inital_spm_model_path = '/gsfs0/data/ritcheym/data/fmri/mice/analysis/encoding/Emotion_and_Contexts';
+denoisedRawDataPath = '/gsfs0/data/ritcheym/data/fmri/mice/analysis/encoding/Denoised_Raw_Data';
+behav_data_path = '/gsfs0/data/ritcheym/data/fmri/mice/data/sourcedata';
 
 %% Masks
 % full brain and MTL masks
@@ -30,6 +31,8 @@ subjects  = {'sub-s003' , 'sub-s002', 'sub-s023'};
 %% Parameters
 % hemodynamic_lag (in TRs).
 numberOfROIs        = length(masks);
+TR                  = 1.5;
+TRsPerSession       = 165;
 
 %% Templates
 % In order to perform informational connectivity, we need to define several
@@ -51,84 +54,243 @@ ds_template = cell(1, numberOfROIs);
 
 for m = 1:numberOfROIs
     
-    % Load the fMRI data into MATLAB using cosmo_fmri_dataset. Assign a new
-    % dataset attribute "maskName" with the name of the mask used to create
-    % it.
+    % see cosmo_fmri_dataset
     ds_template{m} = cosmo_fmri_dataset(char(fourDsingletrialbetasFN), 'mask', masks{m});
-    ds_template{m}.a.maskName = masks{m};
     
-    % using the custom regularExpression, extract the substring from the
-    % single_trial_betaFNs identifying the beta's emotional valence. Take
-    % the match and convert it from a nested cell array to a cell string.
-    % Assign it as a new sample attribute "EmotionalValence".
-    regularExpression = '(?<=Emotion-)[N][a-z]{6,7}(?=_)';
-    matches = regexp(single_trial_betasFNs, regularExpression, 'match');
-    matches = cellfun(@char, matches, 'UniformOutput', false);
-    ds_template{m}.sa.EmotionalValence = matches;
+    % assign a new feature attribute (.fa) to label each voxel in this
+    % dataset as belonging to this ROI
     
-    % using the custom regularExpression, extract the substring from the
-    % single_trial_betaFNs, identifying the beta's context number. Take the
-    % match and convert it from a nested cell array to a cell string to a 
-    % vector of doubles. Assign this column vector as a new sample
-    % attribute, "ContextNumber".
-    regularExpression = '(?<=Context-)[0-4](?=_)';
-    matches           = regexp(single_trial_betasFNs, regularExpression, 'match');
-    matches           = cellfun(@(x) str2double(cell2mat(x)), matches);
-    ds_template{m}.sa.ContextNumber = matches;
+    % derive the ROI label from the mask filename
+    [~, ROIlabel, ~] = fileparts(masks{m});
     
-    % using custom regularExpression, extract the session number from the
-    % single_trial_betaFNs.
-    regularExpression = '(?<=Sess0)[0-6](?=_)';
-    matches           = regexp(single_trial_betasFNs, regularExpression, 'match');
-    matches           = cellfun(@(x) str2double(cell2mat(x)), matches);
-    ds_template{m}.sa.chunks = matches;
+    % remove the leading 'r' and the trailing '_mask' from the ROIlabel
+    ROIlabel = regexprep(ROIlabel, '^r', '');
+    ROIlabel = regexprep(ROIlabel, '_mask', '');
+    
+    % feature attribute must be the same size as the features
+    ds_template{m}.fa.ROIlabel = repmat({ROIlabel}, 1, size(ds_template{m}.samples, 2));
     
 end
 
-%% Timecourse
+% see cosmo_stack
+ds_template = cosmo_stack(ds_template, 2);
+
+% Assign Dataset Attributes
+ds_template.a.ExperimentName = 'MICE_encoding';
+ds_template.a.SubjectID      = subjects{s};
+
+% using the custom regularExpression, extract the substring from the
+% single_trial_betaFNs identifying the beta's emotional valence. Take
+% the match and convert it from a nested cell array to a cell string.
+% Assign it as a new sample attribute "EmotionalValence".
+regularExpression = '(?<=Emotion-)[N][a-z]{6,7}(?=_)';
+matches = regexp(single_trial_betasFNs, regularExpression, 'match');
+matches = cellfun(@char, matches, 'UniformOutput', false);
+ds_template.sa.EmotionalValence = matches;
+
+% using the custom regularExpression, extract the substring from the
+% single_trial_betaFNs, identifying the beta's context number. Take the
+% match and convert it from a nested cell array to a cell string to a 
+% vector of doubles. Assign this column vector as a new sample
+% attribute, "ContextNumber".
+regularExpression = '(?<=Context-)[0-4](?=_)';
+matches           = regexp(single_trial_betasFNs, regularExpression, 'match');
+matches           = cellfun(@(x) str2double(cell2mat(x)), matches);
+ds_template.sa.ContextNumber = matches;
+
+% using custom regularExpression, extract the session number from the
+% single_trial_betaFNs.
+regularExpression = '(?<=Sess0)[0-6](?=_)';
+matches           = regexp(single_trial_betasFNs, regularExpression, 'match');
+matches           = cellfun(@(x) str2double(cell2mat(x)), matches);
+ds_template.sa.chunks = matches;
+
+%% Timecourses
 % Use SPM12 and CoSMoMVPA tools to get the fmri data into MATLAB
 
-%%% Timecourse
-% Strategy: find the original GLM and figure out the raw timeseries from
-% the information contained within the SPM.mat file. Why do it this way? It
-% ensures that we are using the exact same timeseries that were used to
-% creaete the single trial beta images above.
+% Residual Images are what is "left over" after accounting for motion and
+% session means. SPM mat as information about the original raw data.
+ResidualImages = RecurseAndFilterFileSearch(denoisedRawDataPath, '^Res_[0-9]{4}.*\.nii', subjects{s});
+SPM_mat_FN     = RecurseAndFilterFileSearch(denoisedRawDataPath, 'SPM.mat', subjects{s});
 
-% Find the original SPM.mat file and load it into MATLAB
-SPM_FN = RecurseAndFilterFileSearch(inital_spm_model_path, 'SPM.mat', subjects{s});
-assert(length(SPM_FN) == 1, 'More than 1 SPM.mat identified for subject %s', subjects{s})
-SPM    = [];
-load(char(SPM_FN))
+% Get the full paths to the original raw data from the SPM.mat
+SPM = [];
+load(char(SPM_mat_FN))
+rawDataFNs = cellstr(SPM.xY.P);
 
-% Figure out the raw timeseries
-timeseriesFNs_w_frames = cellstr(SPM.xY.P);
-timeseriesFNs   = regexp(timeseriesFNs_w_frames, '.*(?=,[0-9]{1,3})', 'match');
-timeseriesFNs   = cellfun(@char, timeseriesFNs, 'UniformOutput', false);
-timeseriesFNs   = unique(timeseriesFNs);
-timecourse      = cell(1,length(timeseriesFNs));
+% ResidualImages 3-D --> 4-D. They need to be a single 4-D .nii file
+ResuidualImages4D = threeDTofourD(ResidualImages);
 
-% for each mask (i.e., ROI)
-ds_timecourse = {};
+% grab denoised timecourses for each ROI
 for m = 1:numberOfROIs
-    for c = 1:length(timeseriesFNs) % for each run
+
+    % see cosmo_fmri_dataset
+    ds_timecourse{m} = cosmo_fmri_dataset(char(ResuidualImages4D), 'mask', masks{m});
+
+    % Add ROIlabel feature attribute
+    [~, ROIlabel, ~] = fileparts(masks{m});
+    
+    % remove the leading 'r' and the trailing '_mask'
+    ROIlabel = regexprep(ROIlabel, '^r', '');
+    ROIlabel = regexprep(ROIlabel, '_mask', '');
+    
+    % feature attributes must be the same length as the features
+    ds_timecourse{m}.fa.ROIlabel = repmat({ROIlabel}, 1, size(ds_timecourse{m}.samples, 2));
         
-        timecourse{c}            = cosmo_fmri_dataset(timeseriesFNs{c}, ...
-                                                      'mask', masks{m}, ...
-                                                      'chunks', c);
-        timecourse{c}.a.maskName = masks{m};
+end
+
+% Stack the features
+ds_timecourse = cosmo_stack(ds_timecourse, 2);
+
+%%% Assign Dataset Attributes
+ds_timecourse.a.ExperimentName = 'MICE_encoding';
+ds_timecourse.a.SubjectID      = subjects{s};
+
+%%% Assign Sample Attributes
+
+% chunks = runs = scanning sessions
+chunks = cellfun(@(x) str2double(char(x)), regexp(rawDataFNs, '(?<=run-)0[0-6]', 'match'));
+ds_timecourse.sa.chunks = chunks;
+
+%---Read in Behavioral Data -----%
+
+% identifty the events tsv files
+behav_data = RecurseAndFilterFileSearch(behav_data_path, '.*encoding.*events\.tsv', subjects{s});
+
+% create a logical filter, identifying all of the runs that were included
+% in the model
+chunk_filt = false(length(behav_data), 1);
+for c = unique(chunks)'
+    filt = contains(behav_data, sprintf('run-0%d', c));
+    chunk_filt = filt | chunk_filt;
+end
+
+% censor runs that were not in the model
+behav_data(~chunk_filt) = [];
+
+% read into matlab
+behav_data = cellfun(@custom_read_tsv, behav_data, 'UniformOutput', false);
+behav_data = vertcat(behav_data{:});
+
+% EmotionalValence = the emotional valence that is occuring at each
+% timepoint. n/a when fixation is on the screen.
+ds_timecourse.sa.EmotionalValence = repmat({'n/a'}, size(ds_timecourse.samples, 1), 1);
+
+NeuBlockFilt = strcmp(behav_data.Condition, 'neu');
+NeuIDXs = block_durations_as_IDXs(NeuBlockFilt);
+
+NegBlockFilt = strcmp(behav_data.Condition, 'neg');
+NegIDXs = block_durations_as_IDXs(NegBlockFilt);
+
+% Remove the overlapping elements
+f = ismember(NeuIDXs, NegIDXs);
+k = ismember(NegIDXs, NeuIDXs);
+overlap = NeuIDXs(f);
+NeuIDXs(f) = [];
+NegIDXs(k) = [];
+
+ds_timecourse.sa.EmotionalValence(NeuIDXs) = {'Neutral'};
+ds_timecourse.sa.EmotionalValence(NegIDXs) = {'Negative'};
+
+% ContextNumber = the context number that is occuring at each timepoint.
+% n/a when fixation is on the screen.
+ds_timecourse.sa.ContextNumber    = NaN(size(ds_timecourse.samples, 1), 1);
+
+% force the ContextNum column of block onset events to take on the value 
+% of the first trial within the miniblock
+behav_data.ContextNum(isnan(behav_data.ContextNum)) = behav_data.ContextNum(find(isnan(behav_data.ContextNum)) + 1);
+
+% A logical filter identifying block onset events
+blockOnsetsFilt = isnan(behav_data.ColorNum);
+
+Con1Filt = blockOnsetsFilt & behav_data.ContextNum == 1;
+Con1IDXs = block_durations_as_IDXs(Con1Filt);
+
+Con2Filt = blockOnsetsFilt & behav_data.ContextNum == 2;
+Con2IDXs = block_durations_as_IDXs(Con2Filt);
+
+Con3Filt = blockOnsetsFilt & behav_data.ContextNum == 3;
+Con3IDXs = block_durations_as_IDXs(Con3Filt);
+
+Con4Filt = blockOnsetsFilt & behav_data.ContextNum == 4;
+Con4IDXs = block_durations_as_IDXs(Con4Filt);
+
+Con1IDXs(ismember(Con1IDXs, overlap)) = [];
+Con2IDXs(ismember(Con2IDXs, overlap)) = [];
+Con3IDXs(ismember(Con3IDXs, overlap)) = [];
+Con4IDXs(ismember(Con4IDXs, overlap)) = [];
+
+ds_timecourse.sa.ContextNumber(Con1IDXs) = 1;
+ds_timecourse.sa.ContextNumber(Con2IDXs) = 2;
+ds_timecourse.sa.ContextNumber(Con3IDXs) = 3;
+ds_timecourse.sa.ContextNumber(Con4IDXs) = 4;
+
+% z-score with each scanning session
+ds_timecourse = cosmo_fx(ds_timecourse, @zscore, {'chunks'});
+
+%% Calculate the informational timecourses for each ROI
+% One informational timecourse per ROI. See cosmo_informational_timecourse
+
+info_timecourse = cosmo_informational_timecourse(ds_template, ds_timecourse, 'EmotionalValence', 'Negative')';
+
+%% Correlate informational timecourses
+% Calculate the correlation between each of the ROIs information
+% timecoruses. Write out.
+
+%>% Some sort of visual %>%
+
+[rho, pvalue] = corr(horzcat(info_timecourse{:}), 'type', 'Spearman');
+
+save(sprintf('sub-%s_results.mat', subjects{s}), 'rho', 'pvalue', 'info_timecourse', 'masks')
+
+%% Subfunctions
+
+function fullpathtofourDfile = threeDTofourD(files)
+
+    fourD_filename = sprintf('sub-%s_res.nii', subjects{s});
+    
+    fullpathtofourDfile = fullfile(unique(cellfun(@fileparts, files, 'UniformOutput', false)), fourD_filename);
+    
+    if ~exist(char(fullpathtofourDfile), 'file')
+    
+        matlabbatch{1}.spm.util.cat.vols  = files;
+        matlabbatch{1}.spm.util.cat.name  = fourD_filename;
+        matlabbatch{1}.spm.util.cat.dtype = 0;
+
+        spm_jobman('run', matlabbatch)
+    
     end
-    ds_timecourse = vertcat(ds_timecourse, cosmo_stack(timecourse));
+    
 end
 
-%% Information Connectivity!
-
-keyboard
-
-info_timecourse = cell(1, numberOfROIs);
-for m = 1:numberOfROIs
-    info_timecourse{m} = cosmo_information_connectivity(ds_template{m}, ds_timecourse{m});
+function behav_data = custom_read_tsv(x)
+    behav_data = readtable(x, 'FileType', 'text', 'Delimiter', '\t');
+    behav_data.Run = repmat(regexp(x, 'run-0[0-6]', 'match'), height(behav_data), 1);
 end
 
-keyboard
+function IDXs = block_durations_as_IDXs(Filt)
+    
+    % Onsets and Offsets in TRs
+    % Convert Onset and Offset times relative to beginning of run -->
+    % relative to beginning of experiment   
+
+    blockOnsetsInTRs  = [];
+    blockOffsetsInTRs = [];
+    
+    runs = unique(behav_data.Run);
+    for r = 1:length(runs)
+        runFilt = strcmp(behav_data.Run, runs{r});
+        F = runFilt & Filt;
+        OffSet = (r - 1) * TRsPerSession;
+        blockOnsetsInTRs  = vertcat(blockOnsetsInTRs, round(behav_data.onset(F, :) / TR + OffSet));
+        blockOffsetsInTRs = vertcat(blockOffsetsInTRs, round((behav_data.onset(find(F) + 4) + 5) / TR + OffSet));
+    end
+    
+    % Collect indexs
+    IDXs = [];
+    for b = 1:length(blockOnsetsInTRs)
+        IDXs = horzcat(IDXs, blockOnsetsInTRs(b):blockOffsetsInTRs(b));
+    end
+end
 
 end
