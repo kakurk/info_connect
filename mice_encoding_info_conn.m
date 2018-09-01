@@ -18,9 +18,15 @@ behav_data_path = '/gsfs0/data/ritcheym/data/fmri/mice/data/sourcedata';
 % full brain and MTL masks
 maskType = 'HIPP-PHC';
 switch maskType
-    case 'HIPP-PHC'
+    case 'PM-System'
         masks{1} = fullfile(data_path, 'rHIPP_BODY_L_mask.nii');
         masks{2} = fullfile(data_path, 'rPHC_ANT_L_mask.nii');
+        masks{3} = XX; 
+    case 'AM-System'
+        masks{1} = XX;
+        masks{2} = XX;
+        masks{3} = XX;
+        masks{4} = XX;
 end
 
 %% Subjects
@@ -152,6 +158,9 @@ ds_timecourse.a.SubjectID      = subjects{s};
 chunks = cellfun(@(x) str2double(char(x)), regexp(rawDataFNs, '(?<=run-)0[0-6]', 'match'));
 ds_timecourse.sa.chunks = chunks;
 
+% z-score with each scanning session
+ds_timecourse = cosmo_fx(ds_timecourse, @zscore, {'chunks'});
+
 %---Read in Behavioral Data -----%
 
 % identifty the events tsv files
@@ -225,23 +234,62 @@ ds_timecourse.sa.ContextNumber(Con2IDXs) = 2;
 ds_timecourse.sa.ContextNumber(Con3IDXs) = 3;
 ds_timecourse.sa.ContextNumber(Con4IDXs) = 4;
 
-% z-score with each scanning session
-ds_timecourse = cosmo_fx(ds_timecourse, @zscore, {'chunks'});
+ds_timecourse.sa.TimePoint = [1:size(ds_timecourse.samples, 1)]';
 
 %% Calculate the informational timecourses for each ROI
 % One informational timecourse per ROI. See cosmo_informational_timecourse
 
-info_timecourse = cosmo_informational_timecourse(ds_template, ds_timecourse, 'EmotionalValence', 'Negative')';
+[ds_t, ds_a, ds_d] = cosmo_informational_timecourse(ds_template, ds_timecourse, 'EmotionalValence');
+
+ds_t = cosmo_split(ds_t, {'ROIname'}, 2);
+ds_a = cosmo_split(ds_a, {'ROIname'}, 2);
+ds_d = cosmo_split(ds_d, {'ROIname'}, 2);
+
+for ri = 1:numberOfROIs
+    
+    % Figure named after ROI
+    figure('Name', char(ds_t{ri}.fa.ROIname));
+    
+    % Target Condition Timecourse
+    subplot(3, 1, 1)
+    plot(ds_t{ri}.samples)
+    title('Target MV Timecourse')
+    axis([1 size(ds_t{ri}.samples, 1) -1 1])
+    
+    % Alternate Condition Timecourse
+    subplot(3, 1, 2)
+    plot(ds_a{ri}.samples)
+    title('Alternate MV Timecourse(s)')
+    axis([1 size(ds_a{ri}.samples, 1) -1 1])
+    labels = cell(1, length(ds_a{1}.fa.AltCondNum));
+    for f = 1:length(ds_a{1}.fa.AltCondNum)
+        labels{f} = sprintf('Alternate Condition %d', ds_a{ri}.fa.AltCondNum(f));
+    end
+    legend(labels)
+    
+    % Discrimination Timecourse
+    subplot(3, 1, 3)
+    plot(ds_d{ri}.samples)
+    title('Discrimination MV Timecourse')
+    axis([1 size(ds_d{ri}.samples, 1) -1 1])
+    
+end
 
 %% Correlate informational timecourses
 % Calculate the correlation between each of the ROIs information
 % timecoruses. Write out.
 
 %>% Some sort of visual %>%
+ds_d = cosmo_stack(ds_d, 2);
 
-[rho, pvalue] = corr(horzcat(info_timecourse{:}), 'type', 'Spearman');
+R = corrplot(ds_d.samples, 'type', 'Spearman', 'varNames', regexprep(ds_d.fa.ROIname, '_', ' '));
 
-save(sprintf('sub-%s_results.mat', subjects{s}), 'rho', 'pvalue', 'info_timecourse', 'masks')
+figure;
+G = graph(R, regexprep(ds_d.fa.ROIname, '_', ' '));
+
+plot(G)
+
+%save(sprintf('sub-%s_results.mat', subjects{s}), 'rho', 'pvalue', 'info_timecourse', 'masks')
 
 %% Subfunctions
 
