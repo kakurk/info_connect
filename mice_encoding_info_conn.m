@@ -4,7 +4,7 @@ function mice_encoding_info_conn(s)
 % SPM12, CoSMoMVPA, and the Informational Connectivity Toolbox
 addpath(genpath('/gsfs0/data/kurkela/Documents/toolboxes-fmri/spm12'));
 addpath(genpath('/gsfs0/data/kurkela/Documents/toolboxes-fmri/CoSMoMVPA'));
-addpath('/gsfs0/data/kurkela/Documents/latest_IC_toolbox');
+addpath(genpath('/gsfs0/data/kurkela/Documents/info_conn/thirdparty'));
 
 %% Relevant Directories
 % data_path = where the single trial beta images are
@@ -13,20 +13,28 @@ addpath('/gsfs0/data/kurkela/Documents/latest_IC_toolbox');
 data_path  = '/gsfs0/data/ritcheym/data/fmri/mice/analysis/encoding/SingleTrialModel_regularmodel';
 denoisedRawDataPath = '/gsfs0/data/ritcheym/data/fmri/mice/analysis/encoding/Denoised_Raw_Data';
 behav_data_path = '/gsfs0/data/ritcheym/data/fmri/mice/data/sourcedata';
+outpath = '/gsfs0/scratch/kurkela/results/mice-encoding-information-connectivity';
 
 %% Masks
 % full brain and MTL masks
-maskType = 'HIPP-PHC';
+maskType = 'PM-System';
 switch maskType
     case 'PM-System'
+        % left
         masks{1} = fullfile(data_path, 'rHIPP_BODY_L_mask.nii');
         masks{2} = fullfile(data_path, 'rPHC_ANT_L_mask.nii');
-        masks{3} = XX; 
-    case 'AM-System'
-        masks{1} = XX;
-        masks{2} = XX;
-        masks{3} = XX;
-        masks{4} = XX;
+        % right
+        masks{3} = fullfile(data_path, 'rHIPP_BODY_R_mask.nii'); 
+        masks{4} = fullfile(data_path, 'rPHC_ANT_R_mask.nii');
+    case 'AT-System'
+        % left
+        masks{1} = fullfile(data_path, 'rAMY_L_mask.nii');
+        masks{2} = fullfile(data_path, 'rHIPP_HEAD_L_mask.nii');
+        masks{3} = fullfile(data_path, 'rPRC_L_mask.nii');
+        % right
+        masks{4} = fullfile(data_path, 'rAMY_R_mask.nii');
+        masks{5} = fullfile(data_path, 'rHIPP_HEAD_R_mask.nii');
+        masks{6} = fullfile(data_path, 'rPRC_R_mask.nii');
 end
 
 %% Subjects
@@ -39,6 +47,7 @@ subjects  = {'sub-s003' , 'sub-s002', 'sub-s023'};
 numberOfROIs        = length(masks);
 TR                  = 1.5;
 TRsPerSession       = 165;
+information = 'EmotionalValence'; % 'ContextNumber'
 
 %% Templates
 % In order to perform informational connectivity, we need to define several
@@ -241,14 +250,14 @@ ds_timecourse.sa.TimePoint = [1:size(ds_timecourse.samples, 1)]';
 
 [ds_t, ds_a, ds_d] = cosmo_informational_timecourse(ds_template, ds_timecourse, 'EmotionalValence');
 
-ds_t = cosmo_split(ds_t, {'ROIname'}, 2);
-ds_a = cosmo_split(ds_a, {'ROIname'}, 2);
-ds_d = cosmo_split(ds_d, {'ROIname'}, 2);
+ds_t = cosmo_split(ds_t, {'ROIname'}, 2); % target info timecourse
+ds_a = cosmo_split(ds_a, {'ROIname'}, 2); % alternative info timecourse
+ds_d = cosmo_split(ds_d, {'ROIname'}, 2); % target - next highest alternative; "discrimination"
 
 for ri = 1:numberOfROIs
-    
+        
     % Figure named after ROI
-    figure('Name', char(ds_t{ri}.fa.ROIname));
+    figure('Name', char(ds_t{ri}.fa.ROIname), 'visible', 'off');
     
     % Target Condition Timecourse
     subplot(3, 1, 1)
@@ -273,23 +282,52 @@ for ri = 1:numberOfROIs
     title('Discrimination MV Timecourse')
     axis([1 size(ds_d{ri}.samples, 1) -1 1])
     
+    % save
+    filename = sprintf('%s_ROI-%s_information-%s_multivar-discim-timecourse.fig', subjects{s}, char(ds_t{ri}.fa.ROIname), information);
+    savefig(fullfile(outpath, filename));
+    
 end
 
 %% Correlate informational timecourses
 % Calculate the correlation between each of the ROIs information
 % timecoruses. Write out.
 
-%>% Some sort of visual %>%
+% the network, as a matrix
 ds_d = cosmo_stack(ds_d, 2);
-
 R = corrplot(ds_d.samples, 'type', 'Spearman', 'varNames', regexprep(ds_d.fa.ROIname, '_', ' '));
+filename = sprintf('%s_network-%s_class-%s_corrplot.fig', subjects{s}, maskType, information);
+savefig(fullfile(outpath, filename));
 
+% the network, as a graph
 figure;
-G = graph(R, regexprep(ds_d.fa.ROIname, '_', ' '));
+G = graph(R, regexprep(ds_d.fa.ROIname, '_', ' '), 'OmitSelfLoops');
+p = plot(G, 'LineWidth', abs(G.Edges.Weight)*100);
+switch maskType
+    case 'PM-System'
+        % custom positions
+        p.XData = [-1 1 -1 1];
+        p.YData = [1 1 -1 -1];
+    case 'AT-System'
+        % custom positions
+        p.XData = [-1 1 -1 1 -1.5 1.5];
+        p.YData = [1 1 -1 -1 0 0];
+end
 
-plot(G)
+% custom color code
+colormap([1 0 0; 0 0 1])
+CData = NaN(1, G.numedges);
+CData(G.Edges.Weight < 0) = -1;
+CData(G.Edges.Weight > 0) = 1;
+p.EdgeCData = CData;
+p.EdgeColor = 'flat';
 
-%save(sprintf('sub-%s_results.mat', subjects{s}), 'rho', 'pvalue', 'info_timecourse', 'masks')
+str = sprintf('%s class-%s networkName-%s', subjects{s}, information, maskType);
+title(str)
+filename = sprintf('%s_network-%s_class-%s_graph.fig', subjects{s}, maskType, information);
+savefig(fullfile(outpath, filename))
+
+filename = sprintf('sub-%s_results.mat', subjects{s});
+save(fullfile(outpath, filename), 'R', 'ds_t', 'ds_a', 'ds_d')
 
 %% Subfunctions
 

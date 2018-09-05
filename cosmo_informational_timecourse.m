@@ -36,7 +36,6 @@ for r = 1:length(ROIs)
     alternatives   = cell(1, ncombos);
     count          = 0;
     
-    
     for ch = chunks'
 
         % Template Patterns NOT FROM THIS CHUNK
@@ -95,14 +94,19 @@ for r = 1:length(ROIs)
         
     end
     
+    %%% Target Timecourse
+    
     % stack
     target            = cosmo_stack(target);
     target.fa.ROIname = {currentROI};
+    
     % reorder
     [~, sortIDxs]  = sort(target.sa.TimePoint);
     target.samples = target.samples(sortIDxs);
     target.sa      = structfun(@(x) x(sortIDxs), target.sa, 'UniformOutput', false);
 
+    %%% Alternative Timecourse
+    
     % stack
     alternatives               = cosmo_stack(alternatives);
     alternatives.fa.ROIname    = repmat({currentROI}, 1, size(alternatives.samples, 2));
@@ -113,6 +117,8 @@ for r = 1:length(ROIs)
     alternatives.samples = alternatives.samples(sortIDXs, :);
     alternatives.sa      = structfun(@(x) x(sortIDXs), alternatives.sa, 'UniformOutput', false);
 
+    %%% Discrimination
+    
     % discimination
     discrimination         = target; % initalize
     discrimination.samples = target.samples - max(alternatives.samples, [], 2);
