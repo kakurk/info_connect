@@ -39,8 +39,8 @@ end
 
 %% Subjects
 % Subject IDs
-%subjects = cellstr(spm_select('List', data_path, 'dir', 'sub-s0[0-3][0-9]'));
-subjects  = {'sub-s003' , 'sub-s002', 'sub-s023'};
+subjects = cellstr(spm_select('List', data_path, 'dir', 'sub-s0[0-3][0-9]'));
+%subjects  = {'sub-s003' , 'sub-s002', 'sub-s023'};
 
 %% Parameters
 % hemodynamic_lag (in TRs).
