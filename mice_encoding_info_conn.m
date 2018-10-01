@@ -19,7 +19,7 @@ outpath = '/gsfs0/scratch/kurkela/results/mice-encoding-information-connectivity
 % full brain and MTL masks
 maskType = 'PM-System';
 switch maskType
-    case 'PM-System'
+    case 'AT-System'
         % left
         masks{1} = fullfile(data_path, 'rHIPP_BODY_L_mask.nii');
         masks{2} = fullfile(data_path, 'rPHC_ANT_L_mask.nii');
@@ -248,6 +248,16 @@ ds_timecourse.sa.TimePoint = [1:size(ds_timecourse.samples, 1)]';
 %% Calculate the informational timecourses for each ROI
 % One informational timecourse per ROI. See cosmo_informational_timecourse
 
+unique_timecourse_chunks = unique(ds_timecourse.sa.chunks)';
+unique_template_chunks   = unique(ds_template.sa.chunks)';
+chunks = ds_template.sa.chunks;
+for si = 1:length(unique_timecourse_chunks)
+    if unique_timecourse_chunks(si) ~= unique_template_chunks(si)
+        chunks(ds_template.sa.chunks == unique_template_chunks(si)) = unique_timecourse_chunks(si);
+    end
+end
+ds_template.sa.chunks = chunks;
+
 [ds_t, ds_a, ds_d] = cosmo_informational_timecourse(ds_template, ds_timecourse, 'EmotionalValence');
 
 ds_t = cosmo_split(ds_t, {'ROIname'}, 2); % target info timecourse
@@ -257,7 +267,7 @@ ds_d = cosmo_split(ds_d, {'ROIname'}, 2); % target - next highest alternative; "
 for ri = 1:numberOfROIs
         
     % Figure named after ROI
-    figure('Name', char(ds_t{ri}.fa.ROIname), 'visible', 'off');
+    figure;
     
     % Target Condition Timecourse
     subplot(3, 1, 1)
