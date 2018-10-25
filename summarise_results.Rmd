@@ -1,0 +1,762 @@
+---
+title: "MICE Item Retrieval Informational Connectivity"
+author: "Kyle Kurkela"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook: 
+    code_folding: hide
+    toc: yes
+---
+
+```{r setup, warning=FALSE, echo=FALSE, message=FALSE}
+library('tidyverse')
+library('R.matlab')
+library('abind')
+library('ggcorrplot')
+```
+
+```{r}
+# Take the mean over the participant dimension. Perform one-sample t.tests, with null hypothesis being the correlation is zero.
+custom.t.test <- function(x){
+  if(all(x == 1) | all(x==0)){
+    return(0)
+  } else {
+    t <- t.test(x)
+    return(t$p.value)
+  }
+}
+
+custom.stats <- function(x, toreturn, compare){
+  tmp <- t.test(x, mu = compare, alternative = "greater")
+  if(toreturn == "pvalue"){
+    return(tmp$p.value)
+  } else if (toreturn == "tvalue"){
+    return(tmp$statistic[['t']])
+  } else if (toreturn == "df"){
+    return(tmp$parameter[['df']])
+  }
+}
+
+custom.uni.stats <- function(x, y, toreturn){
+  tmp <- t.test(x, y, paired = TRUE)
+  if(toreturn == "pvalue"){
+    return(tmp$p.value)
+  } else if (toreturn == "tvalue"){
+    return(tmp$statistic[['t']])
+  } else if (toreturn == "df"){
+    return(tmp$parameter[['df']])
+  }
+}
+
+
+```
+
+# Nodes
+
+The nodes for our analyses included all nodes from the AT and PM systems, including subregions within the MTL.  
+
+Items at retrieval were presented without any indication of their prior experimental condition history. In other words, if I see the apple again, I am giving neither an indication of what `ContextNum` that apple was previously encoded with nor an indiciation of what `EmotionalValence` I previously encontered an item with.  
+
+Can we use neural activity within these nodes to distinguish trials? One interesting way to think about this analysis is as a reverse subsequent memory analysis: instead of sorting trials based on subsequent memory, sorting trials based on their encoding history.  
+
+## Classification Performance
+
+```{r}
+filenames <- list.files(path = '/scratch/kurkela/results/mice-itemret-informational-connectivity/classification_at_nodes/',
+                        pattern = '.*\\.csv',
+                        full.names = TRUE)
+classification_results <- do.call(rbind, lapply(X = filenames, FUN = read.csv)) %>%
+                          filter(!is.element(subject, c("s023", "s030")))
+```
+
+### Emotion
+
+Can we successfully classify the emotional history of items based on multivaraite patterns within or nodes?  
+
+
+```{r}
+classification_results %>%
+  filter(class == "EmotionalValence") %>%
+  group_by(roi) %>%
+  summarize(meanAccuracy = mean(accuracy),
+            pvalue       = custom.stats(accuracy, 'pvalue', .5)) %>%
+  rename(accuracy        = meanAccuracy) %>%
+  mutate(signif          = ifelse(pvalue < .05, '*', '')) -> summmmmary
+
+classification_results %>%
+  filter(class == "EmotionalValence") %>%
+  ggplot(aes(x = roi, y = accuracy), color = 'red') +
+  stat_summary(geom = "pointrange", fun.data = "mean_se") +
+  geom_hline(yintercept = .5, color = 'red', linetype = 2) +
+  geom_text(data = summmmmary, aes(label = signif), nudge_y = .01, size = 10) +
+  expand_limits(y = c(.48,.54)) +
+  theme_grey() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(y = "Accuracy (%)",
+       x = "ROI",
+       title = "Classifier Accuracy",
+       subtitle = "Emotional Valence",
+       caption = "* = p<.05")
+```
+
+Yes, at least in the right hippocampal body, the right inferior temporal cortex, and in the right retrospenial cotext.  
+
+### Context
+
+Can we successfully classify the visualspatial contextual history of items based on multivaraite patterns within or nodes?  
+
+```{r}
+classification_results %>%
+  filter(class == "ContextNum") %>%
+  group_by(roi) %>%
+  summarize(meanAccuracy = mean(accuracy),
+            pvalue       = custom.stats(accuracy, 'pvalue', .25)) %>%
+  rename(accuracy = meanAccuracy) %>%
+  mutate(signif   = ifelse(pvalue < .05, '*', '')) -> summmmmary
+
+classification_results %>%
+  filter(class == "ContextNum") %>%
+  ggplot(aes(x = roi, y = accuracy)) +
+  stat_summary(geom = "pointrange", fun.data = "mean_se") +
+  geom_text(data = summmmmary, aes(label = signif), nudge_y = .01, size = 10) +
+  geom_hline(yintercept = .25, color = 'blue', linetype = 2) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(y = "Accuracy (%)",
+       x = "ROI",
+       title = "Classifier Accuracy",
+       subtitle = "Context Number",
+       caption = "no significant tests")
+  
+```
+
+No, it appears that we cannot. :(.
+
+## Mean Activation
+
+```{r}
+filenames <- list.files(path = '/scratch/kurkela/results/mice-itemret-informational-connectivity/univariate_at_nodes/',
+                        pattern = '.*\\.csv',
+                        full.names = TRUE)
+univaraite_results <- do.call(rbind, lapply(X = filenames, FUN = read.csv)) %>%
+                      filter(!is.element(SubjectID, c("s023", "s030")))
+```
+
+### Emotion
+
+Perhaps we can tell apart trials not on their multivarate patterns but based on their univaraite, mean activation...  
+
+```{r}
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  group_by(ROIlabel, EmotionalValence, SubjectID) %>%
+  summarise(activate = mean(meanActivation)) %>%
+  spread(key = EmotionalValence, value = activate) %>%
+  group_by(ROIlabel) %>%
+  summarise(pvalue = custom.uni.stats(neg, neut, 'pvalue')) %>%
+  mutate(signif = ifelse(pvalue < .05, "*", "")) %>%
+  left_join(univaraite_results, ., by = "ROIlabel") -> summmmmary
+
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  ggplot(aes(x = ROIlabel, y = meanActivation, group = EmotionalValence)) +
+  stat_summary(aes(color = EmotionalValence),geom = "pointrange", fun.data = "mean_se", position = position_dodge(width = .2)) +
+  geom_text(data = summmmmary, stat = "summary", fun.data = "mean_se", aes(label = signif, group = NULL), nudge_y = .01, size = 10) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(y = "Mean Activation (Beta)",
+       x = "ROI",
+       title = "Mean Activation",
+       caption = "no significant tests")
+```
+
+It does not appear to be the case :(.  
+
+### Context
+
+Perhaps we can tell apart trials not on their multivarate patterns but based on their univaraite, mean activation...  
+
+
+```{r}
+custom.anova.stats <- function(a, b, c, d, subjects, toreturn){
+  data.frame(con1 = a, con2 = b, con3 = c, con4 = d, subjects = subjects) %>%
+    gather_(key_col = "contexts", value_col = "activation", gather_cols = c("con1", "con2", "con3", "con4")) %>% 
+    mutate(contexts = factor(contexts)) %>% 
+    aov(data = ., activation~contexts+Error(subjects/contexts)) %>% 
+    summary() -> tmp
+  
+  if(toreturn == "pvalue"){
+    return(tmp$`Error: subjects:contexts`[[1]][['Pr(>F)']][[1]])
+  }
+}
+
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  group_by(ROIlabel, ContextNum, SubjectID) %>%
+  summarise(activate = mean(meanActivation)) %>%
+  ungroup() %>%
+  mutate(ContextNum = factor(ifelse(ContextNum == 1, "context1", 
+                                    ifelse(ContextNum == 2, "context2", 
+                                           ifelse(ContextNum == 3, "context3", 
+                                                  ifelse(ContextNum == 4, "context4", NA)))))) %>%
+  spread(key = ContextNum, value = activate) %>%
+  group_by(ROIlabel) %>%
+  summarise(pvalue = custom.anova.stats(context1, context2, context3, context4, SubjectID, 'pvalue')) %>%
+  mutate(signif = ifelse(pvalue < .05, "*", "")) %>%
+  left_join(univaraite_results, ., by = "ROIlabel") -> summmmmary
+
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  ggplot(aes(x = ROIlabel, y = meanActivation, group = ContextNum)) +
+  stat_summary(aes(color = ContextNum),geom = "pointrange", fun.data = "mean_se", position = position_dodge(width = .2)) +
+  geom_text(data = summmmmary, stat = "summary", fun.data = "mean_se", aes(label = signif, group = NULL), nudge_y = .5, size = 10) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(y = "Mean Activation (Beta)",
+       x = "ROI",
+       title = "Mean Activation",
+       caption = "*=p<.05")
+```
+
+It appears that we can, at least in the bilateral hippocampal body.  
+
+## Questions
+
+1. Is the univariate difference between levels of the `EmotionalValence` factor giving us any _unique information_ from classifier performance?  
+  
+IFF univariate mean activation AND classifier performance are telling us the same information, then the outcomes of the two analyses should be highly correlated across subjects and nodes.  
+
+```{r, warning=FALSE,message=FALSE}
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  group_by(ROIlabel, SubjectID, EmotionalValence) %>%
+  summarize(meanA = mean(meanActivation),
+            n = n()) %>%
+  spread(EmotionalValence, meanA) %>%
+  mutate(differenceScore = neg - neut) -> tmpA
+
+classification_results %>%
+  filter(class == "EmotionalValence") -> tmpB
+
+tmp <- left_join(tmpA, tmpB, by = c("SubjectID" = "subject", "ROIlabel" = "roi")) %>% select(SubjectID, ROIlabel, differenceScore, accuracy)
+  
+cor.test(tmp$differenceScore, tmp$accuracy)
+```
+
+They are, perhaps unsurprisingly, telling us unique information. In other words, they are not very highly correlated.  
+
+CONTEXT  
+
+2. Is the univariate difference between levels of the `ContextNum` factor giving us any _unique information_ from classifier performance?  
+  
+IFF the univariate mean activation AND classifier performance are telling us the same information, then the outcomes of the two analyses should be highly correlated across subjects and nodes.  
+
+```{r, warning=FALSE}
+univaraite_results %>%
+  filter(Probe != "novel") %>%
+  group_by(ROIlabel, SubjectID, ContextNum) %>%
+  summarize(meanA = mean(meanActivation)) %>%
+  spread(ContextNum, meanA) %>%
+  mutate(meanSqaureError = sum((`1`- mean(`1`, `2`,`3`,`4`))^2,
+                               (`2`- mean(`1`, `2`,`3`,`4`))^2,
+                               (`3`- mean(`1`, `2`,`3`,`4`))^2,
+                               (`4`- mean(`1`, `2`,`3`,`4`))^2)/4) -> tmpA
+
+classification_results %>%
+  filter(class == "ContextNum") -> tmpB
+
+tmp <- left_join(tmpA, tmpB, by = c("SubjectID" = "subject", "ROIlabel" = "roi")) %>% select(SubjectID, ROIlabel, meanSqaureError, accuracy)
+  
+cor.test(tmp$meanSqaureError, tmp$accuracy)
+```
+
+They are, perhaps unsurprisingly, telling us unique information. In other words, they are not very highly correlated.  
+
+3. What does any of this mean for memory outcomes?  
+
+Comming soon ...  
+
+# Edges
+
+Load and Sort Results
+
+```{r}
+filenames   <- list.files(path = '/scratch/kurkela/results/mice-itemret-informational-connectivity',
+                          pattern = ".*results\\.mat",
+                          full.names = TRUE,
+                          recursive = TRUE)
+#results     <- lapply(X = filenames, FUN = readMat)
+whole_emo_F <- grepl(x = filenames, 
+                     pattern = "wholeMTL") & 
+               grepl(x = filenames,
+                     pattern = "class-EmotionalValence")
+whole_con_F <- grepl(x = filenames, 
+                     pattern = "wholeMTL") & 
+               grepl(x = filenames,
+                     pattern = "class-ContextNum")
+within_emo_F <- grepl(x = filenames, 
+                      pattern = "withinMTL") & 
+                grepl(x = filenames,
+                      pattern = "class-EmotionalValence")
+within_con_F <- grepl(x = filenames, 
+                      pattern = "withinMTL") & 
+                grepl(x = filenames,
+                      pattern = "class-ContextNum")
+```
+
+## Whole-MTL
+
+Brain regions do not operate in isolation. Can we detect shared multivariate representation of encoding history amongst our ROIs?  
+
+### Informational Connectivity: Emotion
+
+```{r}
+idxs <- which(whole_emo_F)
+# Create a 3-D matrix of Correlation Values
+c <- 0
+for(r in idxs){
+  c <- c+1
+  if(all(is.nan(results[[r]]$nullR))){
+    #print('BAHHH')
+    #print(results[[r]]$ds[[4]])
+    next
+  } else if(c == 1){
+    R     <- results[[r]]$R
+    nullR <- apply(results[[r]]$nullR, c(1,2), mean)
+    diffR <- R - nullR
+  } else{
+    R     <- abind(results[[r]]$R, R, along = 3)
+    nullR <- abind(apply(results[[r]]$nullR, c(1,2), mean), nullR, along = 3)
+    diffR <- abind(results[[r]]$R - apply(results[[r]]$nullR, c(1,2), mean), diffR, along = 3)
+  }
+}
+
+Labels <- unlist(results[[1]]$ds.d[[2]][,,1]$ROIname)
+```
+
+```{r}
+P <- apply(R, c(1,2), custom.t.test)
+R <- apply(R, c(1,2), mean)
+rownames(R) <- Labels
+colnames(R) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P,
+             title = "Observed Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+Above is the "observed" informational connectivity amongst our cortical and whole MTL rois.  "Observed" informational connectivity calculated based on the actual encoding history of the trials. X's indicate insignificant results.  
+
+```{r}
+P <- apply(nullR, c(1,2), custom.t.test)
+nullR <- apply(nullR, c(1,2), mean)
+nullR.Emo <- nullR
+rownames(nullR) <- Labels
+colnames(nullR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+nullR %>%
+  ggcorrplot(p.mat = P,
+             title = "Null Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+Above is the "null" or "baseline" informational connectivity matrix, calculated by psudeorandomly shuffling trial labels 1000 times in the following manner:
+
+1. Shuffle trials within a chunk. Why? To preserve the balance of conditions across chunks.  
+2. Shuffle trials such that they are balanced over levels of `EmotionalValence`. E.g., 1/2 of the trials that were previously labeled as Emotional and still labeled as Emotional. 1/2 of the trials that were previously labeled as Emotional are switched to being labeled Neutral.  
+3. Recalculate the differential 
+
+What is interesting about this matrix? The values off the diganol are not zero. In other words, there does appear to be some sort of "baseline" level of informational connectivity between brain regions.  
+
+```{r, warning=FALSE,message=FALSE}
+P <- apply(diffR, c(1,2), custom.t.test)
+diffR <- apply(diffR, c(1,2), mean)
+rownames(diffR) <- Labels
+colnames(diffR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+diffR %>%
+  ggcorrplot(title = "Differential Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null")
+
+diffR %>%
+  ggcorrplot(p.mat = P,
+             insig = "blank",
+             title = "Differential Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null",
+       caption = "Only Statistically Significant Connections")
+```
+
+### Information Connectivity: Context
+
+```{r}
+idxs <- which(whole_con_F)
+# Create a 3-D matrix of Correlation Values
+c <- 0
+for(r in idxs){
+  c <- c+1
+  if(all(is.nan(results[[r]]$nullR))){
+    #print('BAHHH')
+    next
+  } else if(c == 1){
+    R     <- results[[r]]$R
+    nullR <- apply(results[[r]]$nullR, c(1,2), mean)
+    diffR <- R - nullR
+  } else{
+    R     <- abind(results[[r]]$R, R, along = 3)
+    nullR <- abind(apply(results[[r]]$nullR, c(1,2), mean), nullR, along = 3)
+    diffR <- abind(results[[r]]$R - apply(results[[r]]$nullR, c(1,2), mean), diffR, along = 3)
+  }
+}
+
+Labels <- unlist(results[[1]]$ds.d[[2]][,,1]$ROIname)
+```
+
+```{r}
+P <- apply(R, c(1,2), custom.t.test)
+R.cont.wholeMTL <- apply(R, c(1,2), mean)
+R <- apply(R, c(1,2), mean)
+rownames(R) <- Labels
+colnames(R) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P, 
+             title = "Observed Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r}
+P <- apply(nullR, c(1,2), custom.t.test)
+nullR <- apply(nullR, c(1,2), mean)
+nullR.Con <- nullR
+rownames(nullR) <- Labels
+colnames(nullR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+nullR %>%
+  ggcorrplot(p.mat = P,
+             title = "Null Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r, warning=FALSE,message=FALSE}
+P <- apply(diffR, c(1,2), custom.t.test)
+diffR <- apply(diffR, c(1,2), mean)
+rownames(diffR) <- Labels
+colnames(diffR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+diffR %>%
+  ggcorrplot(title = "Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null")
+  
+diffR %>%
+  ggcorrplot(p.mat = P, insig = "blank", title = "Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null",
+       caption = "Only Statistically Significant Connections")
+```
+
+### Functional Connectivity
+
+```{r}
+univaraite_results %>%
+  filter(is.element(ROIlabel, Labels)) %>%
+  filter(Probe != "novel") %>%
+  group_by(SubjectID, chunks, ROIlabel) %>%
+  mutate(Trial = 1:n()) %>% # we need to add a Trial variable
+  ungroup() %>%
+  spread(ROIlabel, meanActivation) %>%
+  select(SubjectID, matches("_ROI"), matches("_[LR]$")) -> trial_by_trial_mean_activation_df
+
+subjects <- unique(trial_by_trial_mean_activation_df$SubjectID)
+c <- 0
+for(s in subjects){
+  c <- c+1
+  trial_by_trial_mean_activation_df[trial_by_trial_mean_activation_df$SubjectID == s,]  %>%
+  select(-SubjectID) %>%
+  as.matrix() %>%
+  cor(method = "spearman") -> thisSubjectsFCmat
+  if(c == 1){
+    R <- thisSubjectsFCmat
+  } else{
+    R <- abind(R, thisSubjectsFCmat, along = 3)
+  }
+}
+
+P <- apply(R, c(1,2), custom.t.test)
+R <- apply(R, c(1,2), mean)
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P, 
+             title = "Functional Connectivity\nCalculated from Beta Series", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+### Questions
+
+1. Is there some sort of mistake? Are the null informational connectivity matrices calculated in the `EmotionalValence` analysis and the `ContextNum` analysis _identical_?
+
+IFF the null hypotheses matrices are identical, then they should be correlated at r == 1.  
+
+```{r}
+cor.test(nullR.Con[lower.tri(nullR.Con)], nullR.Emo[lower.tri(nullR.Emo)])
+```
+
+YES, these null hypothesis matrices are _almost_ identical, but not quite. In other words, this isn't a coding bug. This is actually a good thing, since these matrices are both attempts at estimating the "null" or "baseline" IC among our nodes. In other words, reguardless of Memory or our experimental conditions, the brain regions seem to be informationally connected to one another in the above pattern.
+
+2. Are two brain regions that are functionally connected **also necessarirly** informationally connected?
+
+IFF two brains regions that are functionally connected are also informationally connected, then the correlation between the functional connectivity matrix and the null informational connectivity matrix should be high.  
+
+```{r}
+cor.test(nullR.Con[lower.tri(nullR.Con)], R[lower.tri(R)], method = "spearman")
+```
+
+The two matrices appear to be highly similar, though not entirely so. In total, the two matrices share about ~45% of their variance.  
+
+3. What does this mean for memory outcomes?  
+
+Comming soon...  
+
+## Within-MTL
+
+### Informational Connectivity: Emotion
+
+```{r}
+idxs <- which(within_emo_F)
+# Create a 3-D matrix of Correlation Values
+c <- 0
+for(r in idxs){
+  c <- c+1
+  if(all(is.nan(results[[r]]$nullR))){
+    #print('BAHHH')
+    next
+  } else if(c == 1){
+    R     <- results[[r]]$R
+    nullR <- apply(results[[r]]$nullR, c(1,2), mean)
+    diffR <- R - nullR
+  } else{
+    R     <- abind(results[[r]]$R, R, along = 3)
+    nullR <- abind(apply(results[[r]]$nullR, c(1,2), mean), nullR, along = 3)
+    diffR <- abind(results[[r]]$R - apply(results[[r]]$nullR, c(1,2), mean), diffR, along = 3)
+  }
+}
+
+Labels <- unlist(results[[idxs[1]]]$ds.d[[2]][,,1]$ROIname)
+```
+
+```{r}
+P <- apply(R, c(1,2), custom.t.test)
+R <- apply(R, c(1,2), mean)
+rownames(R) <- Labels
+colnames(R) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P, 
+             title = "Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r}
+P <- apply(nullR, c(1,2), custom.t.test)
+nullR <- apply(nullR, c(1,2), mean)
+nullR.Emo <- nullR
+rownames(nullR) <- Labels
+colnames(nullR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+nullR %>%
+  ggcorrplot(p.mat = P,
+             title = "Null Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r, warning=FALSE,message=FALSE}
+P <- apply(diffR, c(1,2), custom.t.test)
+diffR <- apply(diffR, c(1,2), mean)
+rownames(diffR) <- Labels
+colnames(diffR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+diffR %>%
+  ggcorrplot(title = "Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null")
+
+diffR %>%
+  ggcorrplot(p.mat = P, insig = "blank", title = "Informational Connectivity\nWith Respect to Emotional Valence", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null",
+       caption = "Only Statistically Significant Connections")
+```
+
+### Informational Connectivity: Context
+
+```{r}
+idxs <- which(within_con_F)
+# Create a 3-D matrix of Correlation Values
+c <- 0
+for(r in idxs){
+  c <- c+1
+  if(all(is.nan(results[[r]]$nullR))){
+    #print('BAHHH')
+    next
+  } else if(c == 1){
+    R     <- results[[r]]$R
+    nullR <- apply(results[[r]]$nullR, c(1,2), mean)
+    diffR <- R - nullR
+  } else{
+    R     <- abind(results[[r]]$R, R, along = 3)
+    nullR <- abind(apply(results[[r]]$nullR, c(1,2), mean), nullR, along = 3)
+    diffR <- abind(results[[r]]$R - apply(results[[r]]$nullR, c(1,2), mean), diffR, along = 3)
+  }
+}
+
+Labels <- unlist(results[[idxs[1]]]$ds.d[[2]][,,1]$ROIname)
+```
+
+```{r}
+P <- apply(R, c(1,2), custom.t.test)
+R <- apply(R, c(1,2), mean)
+rownames(R) <- Labels
+colnames(R) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P, 
+             title = "Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r}
+P <- apply(nullR, c(1,2), custom.t.test)
+nullR <- apply(nullR, c(1,2), mean)
+nullR.Con <- nullR
+rownames(nullR) <- Labels
+colnames(nullR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+# Plot!
+nullR %>%
+  ggcorrplot(p.mat = P,
+             title = "Null Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+```{r, warning=FALSE,message=FALSE}
+P <- apply(diffR, c(1,2), custom.t.test)
+diffR <- apply(diffR, c(1,2), mean)
+rownames(diffR) <- Labels
+colnames(diffR) <- Labels
+rownames(P) <- Labels
+colnames(P) <- Labels
+
+diffR %>%
+  ggcorrplot(title = "Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null")
+
+diffR %>%
+  ggcorrplot(p.mat = P,
+             insig = "blank",
+             title = "Informational Connectivity\nWith Respect to Context", 
+             legend.title = "Average Spearman's Rank Corr") +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(fill = "Observed - Null",
+       caption = "Only Statistically Significant Connections")
+```
+
+### Functional Connectivity
+
+```{r}
+univaraite_results %>%
+  filter(is.element(ROIlabel, Labels)) %>%
+  filter(Probe != "novel") %>%
+  group_by(SubjectID, chunks, ROIlabel) %>%
+  mutate(Trial = 1:n()) %>% # we need to add a Trial variable
+  ungroup() %>%
+  spread(ROIlabel, meanActivation) %>%
+  select(SubjectID, matches("_[LR]$")) -> trial_by_trial_mean_activation_df
+
+subjects <- unique(trial_by_trial_mean_activation_df$SubjectID)
+c <- 0
+for(s in subjects){
+  c <- c+1
+  trial_by_trial_mean_activation_df[trial_by_trial_mean_activation_df$SubjectID == s,]  %>%
+  select(-SubjectID) %>%
+  as.matrix() %>%
+  cor(method = "spearman") -> thisSubjectsFCmat
+  if(c == 1){
+    R <- thisSubjectsFCmat
+  } else{
+    R <- abind(R, thisSubjectsFCmat, along = 3)
+  }
+}
+
+P <- apply(R, c(1,2), custom.t.test)
+R <- apply(R, c(1,2), mean)
+
+# Plot!
+R %>%
+  ggcorrplot(p.mat = P, 
+             title = "Functional Connectivity\nCalculated from Beta Series", 
+             legend.title = "Average Spearman's Rank Corr")
+```
+
+### Questions 
+
+1. Is there some sort of mistake? Are the null informational connectivity matrices calculated in the `EmotionalValence` analysis and the `ContextNum` analysis _identical_?
+
+IFF the null hypotheses matrices are identical, then they should be correlated r = 1.
+
+```{r}
+cor.test(nullR.Con[lower.tri(nullR.Con)], nullR.Emo[lower.tri(nullR.Emo)])
+```
+
+YES, these null hypothesis matrices are almost identical but not quite. In other words, this isn't a coding bug. This is actually a good thing, since these matrices are both attempts at estimating the "null" or "baseline" IC among our nodes. In other words, reguardless of Memory or our experimental conditions, the brain regions seem to be informationally connected to one another in the above pattern.
+
+2. Are two brain regions that are functionally connected **also necessarirly** informationally connected?
+
+IFF two brains regions that are functionally connected are also informationally connected, then the correlation between the functional connectivity matrix and the null informational connectivity matrix should be high.  
+
+```{r}
+cor.test(nullR.Con[lower.tri(nullR.Con)], R[lower.tri(R)], method = "spearman")
+```
+
+The two matrices appear to be highly similar, though not entirely so. In total, the two matrices share about ~52% of their variance.  
+
+3. What does this mean for memory outcomes?  
+
+Comming soon...
