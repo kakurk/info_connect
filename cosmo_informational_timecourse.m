@@ -96,7 +96,7 @@ for r = 1:length(ROIs)
         Filt = ~ismember(this_roi_ds_betas.sa.chunks, ch);
         ds_template_patterns = cosmo_slice(this_roi_ds_betas, Filt);
         ds_template_patterns = cosmo_average_samples(ds_template_patterns, 'split_by', {targetCondition});
-
+        
         % Timecourse FROM THIS CHUNK
         Filt = ismember(this_roi_ds_timecourse.sa.chunks, ch);
         ds_multivariate_timecourse = cosmo_slice(this_roi_ds_timecourse, Filt);
